@@ -1,183 +1,184 @@
 package org.example;
+
 import java.io.*;
 import java.net.Socket;
 import java.util.Scanner;
-import jakarta.json.Json;
-import jakarta.json.JsonWriter;
-import jakarta.json.JsonObject;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import org.json.JSONObject;
 
 public class Client {
     private Socket socket;
-    private DataInputStream fromServer;
-    private DataOutputStream toServer;
+    private BufferedReader fromServer;
+    private OutputStreamWriter toServer;
     private boolean continueToPlay = true;
-    private int score;
+    private Command player;
 
     private int firstPlayerScore = 0;
     private int secondPlayerScore = 0;
 
+    private final JSONObject firstPlayerResponse = new JSONObject();
+    private final JSONObject secondPlayerResponse = new JSONObject();
+
     boolean firstPlayerPassed = false;
     boolean secondPlayerPassed = false;
-
-    private int myNumber;
-    private int otherNumber;
-
-    public static int PLAYER1 = 1;
-    public static int PLAYER2 = 2;
-    public static int PLAYER1_WON = 3;
-    public static int PLAYER2_WON = 4;
-    public static int PLAYER1_PASS = 5;
-    public static int PLAYER2_PASS = 6;
-    public static int DRAW = 7;
-    public static int CONTINUE = 8;
-    public static int TAKE = 9;
-    public static int WAIT = 10;
 
     public Client(Socket socket) {
         try {
             this.socket = socket;
-            this.fromServer = new DataInputStream(socket.getInputStream());
-            this.toServer = new DataOutputStream(socket.getOutputStream());
-            this.score = 0;
+            this.fromServer = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            this.toServer = new OutputStreamWriter(socket.getOutputStream());
 
         } catch (IOException e) {
             closeEverything(socket, fromServer, toServer);
         }
     }
 
-    private String buildJsonData(int player, String message) {
-        JsonObject jsonObject = Json.createObjectBuilder().add("message", player +": "+message).build();
-        StringWriter stringWriter = new StringWriter();
-        try(JsonWriter jsonWriter = Json.createWriter(stringWriter)){jsonWriter.writeObject(jsonObject);}
-        return stringWriter.toString();
+    public void take(Command player) throws IOException {
+        JSONObject response = firstPlayerResponse;
+
+        if(player == Command.PLAYER2){
+            response = secondPlayerResponse;
+        }
+
+        response.put("command", Command.TAKE);
+        toServer.write(response.toString() + '\n');
+        toServer.flush();
+        String serverResponseString = fromServer.readLine();
+        JSONObject serverResponse = new JSONObject(serverResponseString);
+        int card = serverResponse.getInt("card");
+
+        if(player == Command.PLAYER1){
+            firstPlayerScore += card;
+        }
+        if(player == Command.PLAYER2){
+            secondPlayerScore += card;
+        }
+        System.out.println("CARD VALUE: " + card);
     }
 
     public void run() {
         try {
-            int player = fromServer.readInt(); // ktory player
-
-            if (player == PLAYER1) {
-                System.out.println("You are player 1. Waiting for player 2 to join.");
-                myNumber = 1;
-                otherNumber = 2;
-                //notification that player 2 joined
-                fromServer.readInt();
-            } else if (player == PLAYER2) {
-                System.out.println("You are player 2. Waiting for player 1 to move.");
-                myNumber = 2;
-                otherNumber = 1;
+            String playerString = fromServer.readLine(); // informacja ktorym jestes graczem
+            JSONObject playerJSON = new JSONObject(playerString);
+            player = playerJSON.getEnum(Command.class, "player");
+            int value = playerJSON.getInt("value"); // ta wartosc jest przesylana jedynie po to, zeby sensownie wyswietlic ponizsze komunikaty
+            if (player == Command.PLAYER1) {
+                if(value==0){
+                    System.out.println("You are player 1. You start. Waiting for player 2 to join.");
+                }
+                else{
+                    System.out.println("You are player 1. You start.");
+                }
+                //powiadomienie, że drugi gracz dołaczył
+                fromServer.readLine();
+            } else if (player == Command.PLAYER2) {
+                if(value == 0){
+                    System.out.println("You are player 2. Waiting for player 1 to move.");
+                }
+                else{
+                    System.out.println("You are player 2. Waiting for player 1 to join.");
+                }
             }
 
             Scanner scanner = new Scanner(System.in);
-            while (continueToPlay && socket.isConnected()) {
 
-                if (player == PLAYER1) {
-                    System.out.println("Im in first");
+            while (continueToPlay && socket.isConnected()) { // wlasciwa rozgrywka
+                if (player == Command.PLAYER1) {
                     if (!firstPlayerPassed) {
-                        System.out.print("You have " + score + ". Enter a command: ");
+                        System.out.print("You have " + firstPlayerScore + ". Your opponent has " + secondPlayerScore +". Enter a command: ");
                         String command = scanner.nextLine();
+
                         if (command.matches("T")) { //dobiera
-                            toServer.writeInt(TAKE);
-                            int card = fromServer.readInt();
-                            score += card;
-                            System.out.println("CARD: " + card);
+                            take(Command.PLAYER1);
                         } else if (command.matches("N")) { // pasuje
-                            toServer.writeInt(PLAYER1_PASS);
+                            firstPlayerResponse.put("command", Command.PLAYER1_PASS);
+                            toServer.write(firstPlayerResponse.toString() + '\n');
+                            toServer.flush();
                         }
-                        toServer.flush();
                     } else {
-                        toServer.writeInt(WAIT);
+                        firstPlayerResponse.put("command", Command.WAIT);
+                        toServer.write(firstPlayerResponse.toString() + '\n');
+                        toServer.flush();
                     }
                     receiveInfoFromServer();
-
                     if (!continueToPlay) break;
-                } else if (player == PLAYER2) {
-                    System.out.println("Im in 2");
-                    System.out.println(firstPlayerPassed);
+                } else if (player == Command.PLAYER2) {
 
                     receiveInfoFromServer();
                     if (!continueToPlay) break;
 
-                    if(!secondPlayerPassed){
-                        System.out.print("You have " + score + ". Enter a command: ");
+                    if (!secondPlayerPassed) {
+                        System.out.print("You have " + secondPlayerScore + ". Your opponent has " + firstPlayerScore +". Enter a command: ");
                         String command = scanner.nextLine();
 
                         if (command.matches("T")) { //dobiera
-                            toServer.writeInt(TAKE);
-                            int card = fromServer.readInt();
-                            score += card;
-                            System.out.println("CARD: " + card);
+                            take(Command.PLAYER2);
                         }
                         if (command.matches("N")) { // pasuje
-                            toServer.writeInt(PLAYER2_PASS);
+                            secondPlayerResponse.put("command", Command.PLAYER2_PASS);
+                            toServer.write(secondPlayerResponse.toString() + '\n');
+                            toServer.flush();
                         }
+                    } else {
+                        secondPlayerResponse.put("command", Command.WAIT);
+                        toServer.write(secondPlayerResponse.toString() + '\n');
+                        toServer.flush();
                     }
-                    else{
-                        toServer.writeInt(WAIT);
-                    }
-                    toServer.flush();
-
                 }
             }
-        } catch (IOException e) {
+        } catch (
+                IOException e) {
             closeEverything(socket, fromServer, toServer);
         }
-    }
 
-    private void receiveMove() throws IOException {
-        int command = fromServer.readInt();
-        // score actualize
     }
-
 
     private void receiveInfoFromServer() throws IOException {
-        int status = fromServer.readInt();
-        if (status == PLAYER1_WON) {
+        String resultString = fromServer.readLine();
+        JSONObject result = new JSONObject(resultString);
+        if (!result.has("result")) return;
+        Command status = result.getEnum(Command.class, "result");
+        firstPlayerScore = result.getInt("firstPlayerScore");
+        secondPlayerScore = result.getInt("secondPlayerScore");
+        if (status == Command.PLAYER1_WON) {
             continueToPlay = false;
-            if (myNumber == 1) { // zmienic na player
-                System.out.println("You won");
-            } else if (myNumber == 2) {
-                System.out.println("Player 1 has won");
+            if (player == Command.PLAYER1) {
+                System.out.println("You won. You have " + firstPlayerScore);
+            } else if (player == Command.PLAYER2) {
+                System.out.println("You lose. You have " + secondPlayerScore);
             }
-        } else if (status == PLAYER2_WON) {
+        } else if (status == Command.PLAYER2_WON) {
             continueToPlay = false;
-            if (myNumber == 2) {
-                System.out.println("You won");
-            } else if (myNumber == 1) {
-                System.out.println("Player 2 has won");
+            if (player == Command.PLAYER2) {
+                System.out.println("You won. You have " + secondPlayerScore);
+            } else if (player == Command.PLAYER1) {
+                System.out.println("You lose. You have " + firstPlayerScore);
             }
-        } else if (status == DRAW) {
+        } else if (status == Command.DRAW) {
             continueToPlay = false;
-            System.out.println("It's a draw");
-            if (myNumber == 2) {
-                receiveMove();
+            if (player == Command.PLAYER2) {
+                System.out.println("It's a draw. You have " + secondPlayerScore);
+            } else if (player == Command.PLAYER1) {
+                System.out.println("It's a draw. You have " + firstPlayerScore);
             }
-        } else if (status == PLAYER1_PASS) {
+        } else if (status == Command.PLAYER1_PASS) {
             firstPlayerPassed = true;
-            if (myNumber == 1) {
-                firstPlayerScore = fromServer.readInt();
+            if (player == Command.PLAYER1) {
                 System.out.println("You passed. You have " + firstPlayerScore);
-            } else if (myNumber == 2) {
-                System.out.println("First player passed");
-                receiveMove();
+            } else if (player == Command.PLAYER2) {
+                System.out.println("First player passed.");
             }
-        } else if (status == PLAYER2_PASS) {
+        } else if (status == Command.PLAYER2_PASS) {
             secondPlayerPassed = true;
-            if (myNumber == 2) {
-                secondPlayerScore = fromServer.readInt();
+            if (player == Command.PLAYER2) {
                 System.out.println("You passed. You have " + secondPlayerScore);
-            } else if (myNumber == 1) {
-                System.out.println("Second player passed");
-                receiveMove();
+            } else if (player == Command.PLAYER1) {
+                System.out.println("Second player passed.");
             }
-        } else {
-            receiveMove();
         }
     }
 
 
-    public void closeEverything(Socket socket, InputStream in, OutputStream out) {
+    public void closeEverything(Socket socket, BufferedReader in, OutputStreamWriter out) {
         try {
             if (in != null) {
                 in.close();

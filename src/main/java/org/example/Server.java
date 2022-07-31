@@ -1,70 +1,101 @@
 package org.example;
+
+import jakarta.json.JsonObject;
+
+import javax.websocket.server.ServerEndpoint;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.ArrayList;
+
+import org.json.JSONObject;
+
 
 public class Server {
     private final ServerSocket serverSocket;
-
-    public static int PLAYER1 = 1;
-    public static int PLAYER2 = 2;
-    public static int PLAYER1_WON = 3;
-    public static int PLAYER2_WON = 4;
-    public static int PLAYER1_PASS = 5;
-    public static int PLAYER2_PASS = 6;
-    public static int DRAW = 7;
-    public static int CONTINUE = 8;
-    public static int TAKE = 9;
-    public static int WAIT = 10;
 
     public Server(ServerSocket serverSocket) {
         this.serverSocket = serverSocket;
     }
 
-    public void startServer(){
-        try{
-            while (!serverSocket.isClosed()){
+    public static int getRandomNumber() {
+        return (int) ((Math.random() * 2)); // jesli 0 to zostawiam ustaloną kolejnosc, jesli 1 to zmieniam
+    }
+
+    public void startServer() {
+        try {
+            while (!serverSocket.isClosed()) {
+                int value = getRandomNumber();
                 // połączenie z pierwszym graczem
                 Socket firstPlayer = serverSocket.accept();
-                System.out.println("A new client has connected! (player 1)");
+                System.out.println("A new client has connected!");
+
                 // powiadomienie pierwszego gracza, że jest pierwszym graczem
-                new DataOutputStream(firstPlayer.getOutputStream()).writeInt(PLAYER1);
+                OutputStreamWriter fristPlayerWriter = new OutputStreamWriter(firstPlayer.getOutputStream());
+                JSONObject jsonObject1 = new JSONObject();
+                if(value == 0){
+                    jsonObject1.put("player", Command.PLAYER1);
+                }
+                else{
+                    jsonObject1.put("player", Command.PLAYER2);
+                }
+
+                jsonObject1.put("value", value);
+                fristPlayerWriter.write(jsonObject1.toString() + '\n');
+                fristPlayerWriter.flush();
 
                 // połączenie z drugim graczem
                 Socket secondPlayer = serverSocket.accept();
-                System.out.println("A new client has connected! (player 2)");
+                System.out.println("A new client has connected!");
+
                 // powiadomienie drugiego gracza, że jest drugim graczem
-                new DataOutputStream(secondPlayer.getOutputStream()).writeInt(PLAYER2);
+                OutputStreamWriter secondPlayerWriter = new OutputStreamWriter(secondPlayer.getOutputStream());
+                JSONObject jsonObject2 = new JSONObject();
+                if(value == 0){
+                    jsonObject2.put("player", Command.PLAYER2);
+                }
+                else{
+                    jsonObject2.put("player", Command.PLAYER1);
+                }
+                jsonObject2.put("value", value);
+                secondPlayerWriter.write(jsonObject2.toString() +'\n');
+                secondPlayerWriter.flush();
 
                 // rozpoczęcie wątku dla dwóch graczy
-                ClientHandler clientHandler = new ClientHandler(firstPlayer, secondPlayer);
+                ClientHandler clientHandler;
+
+                if (value == 0){
+                    clientHandler = new ClientHandler(firstPlayer, secondPlayer);
+                }
+                else{
+                    clientHandler = new ClientHandler(secondPlayer, firstPlayer);
+                }
                 Thread thread = new Thread(clientHandler);
                 thread.start();
             }
-        } catch (IOException e){
+        } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
-    public void closeServerSocket(){
-        try{
-            if(serverSocket!=null){
+
+    public void closeServerSocket() {
+        try {
+            if (serverSocket != null) {
                 serverSocket.close();
             }
-        }
-        catch(IOException e){
+        } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
-    public static void main(String[] args) throws IOException{
+    public static void main(String[] args) throws IOException {
         ServerSocket serverSocket = new ServerSocket(1234);
         Server server = new Server(serverSocket);
         System.out.println("Starting server...");
         System.out.println("...");
         server.startServer();
-
     }
 }

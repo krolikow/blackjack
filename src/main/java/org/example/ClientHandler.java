@@ -1,4 +1,7 @@
 package org.example;
+
+import org.json.JSONObject;
+
 import java.io.*;
 import java.net.Socket;
 import java.util.Collections;
@@ -7,38 +10,28 @@ public class ClientHandler implements Runnable {
 
     private Socket firstPlayer;
     private Socket secondPlayer;
-    private DataInputStream fromPlayer1;
-    private DataOutputStream toPlayer1;
-    private DataInputStream fromPlayer2;
-    private DataOutputStream toPlayer2;
+    private BufferedReader fromPlayer1;
+    private OutputStreamWriter toPlayer1;
+    private BufferedReader fromPlayer2;
+    private OutputStreamWriter toPlayer2;
     private final Deck deck = new Deck();
     private int firstPlayerScore = 0;
     private int secondPlayerScore = 0;
 
+    private JSONObject firstPlayerResponse = new JSONObject();
+    private JSONObject secondPlayerResponse = new JSONObject();
+
     boolean firstPlayerPassed = false;
     boolean secondPlayerPassed = false;
-
-    public static int PLAYER1 = 1;
-    public static int PLAYER2 = 2;
-    public static int PLAYER1_WON = 3;
-    public static int PLAYER2_WON = 4;
-    public static int PLAYER1_PASS = 5;
-    public static int PLAYER2_PASS = 6;
-    public static int DRAW = 7;
-    public static int CONTINUE = 8;
-    public static int TAKE = 9;
-    public static int WAIT = 10;
-
-    boolean check = false;
 
     public ClientHandler(Socket socket1, Socket socket2) {
         try {
             this.firstPlayer = socket1;
             this.secondPlayer = socket2;
-            this.fromPlayer1 = new DataInputStream(firstPlayer.getInputStream());
-            this.toPlayer1 = new DataOutputStream(firstPlayer.getOutputStream());
-            this.fromPlayer2 = new DataInputStream(secondPlayer.getInputStream());
-            this.toPlayer2 = new DataOutputStream(secondPlayer.getOutputStream());
+            this.fromPlayer1 = new BufferedReader(new InputStreamReader(firstPlayer.getInputStream()));
+            this.toPlayer1 = new OutputStreamWriter(firstPlayer.getOutputStream());
+            this.fromPlayer2 = new BufferedReader(new InputStreamReader(secondPlayer.getInputStream()));
+            this.toPlayer2 = new OutputStreamWriter(secondPlayer.getOutputStream());
 
         } catch (IOException e) {
             closeEverything(firstPlayer, fromPlayer1, toPlayer1);
@@ -46,148 +39,155 @@ public class ClientHandler implements Runnable {
         }
     }
 
-    private void sendMove(DataOutputStream out, int command) throws IOException {
-        out.writeInt(command);
-    }
-
-
-    public int getRandomCard() {
+    public Card getRandomCard() {
         Collections.shuffle(deck.cardList);
-        return deck.cardList.get(1).getValue();
+        return deck.cardList.get(1);
     }
 
-    public void checkIfWin(int player, int score) throws IOException {
-        //check if player won by playing his move
+    public void checkIfWin(JSONObject data, int score, Command player) throws IOException {
+        //sprawdzenie czy gracz wygrał
         if (score == 21) {
-            System.out.println("if (secondPlayerScore == 21)");
-            if (player == PLAYER2) {
-                toPlayer1.writeInt(PLAYER2_WON);
-                toPlayer2.writeInt(PLAYER2_WON);
-            } else if (player == PLAYER1) {
-                toPlayer1.writeInt(PLAYER1_WON);
-                toPlayer2.writeInt(PLAYER1_WON);
+            if (player == Command.PLAYER2) {
+                sendResponse(Command.PLAYER2_WON);
+
+            } else if (player == Command.PLAYER1) {
+                sendResponse(Command.PLAYER1_WON);
             }
             return;
         }
 
-        //check if player lose by playing his move
+        //sprawdzenie czy gracz przegrał
         else if (score > 21) {
-            System.out.println("else if (secondPlayerScore > 21)");
-            if (player == PLAYER2) {
-                toPlayer1.writeInt(PLAYER1_WON);
-                toPlayer2.writeInt(PLAYER1_WON);
-            } else if (player == PLAYER1) {
-                toPlayer1.writeInt(PLAYER2_WON);
-                toPlayer2.writeInt(PLAYER2_WON);
+            if (player == Command.PLAYER2) {
+                secondPlayerScore = 0;
+                sendResponse(Command.PLAYER1_WON);
+            } else if (player == Command.PLAYER1) {
+                firstPlayerScore = 0;
+                sendResponse(Command.PLAYER2_WON);
             }
             return;
         }
 
-        System.out.println("second else");
-        toPlayer1.writeInt(CONTINUE);
+        if (player == Command.PLAYER1) {
+            secondPlayerContinue();
+        } else {
+            firstPlayerContinue();
+        }
+
     }
 
+    public void sendResponse(Command result) throws IOException {
+        firstPlayerResponse.put("result", result);
+        firstPlayerResponse.put("firstPlayerScore", firstPlayerScore);
+        firstPlayerResponse.put("secondPlayerScore", secondPlayerScore);
+        toPlayer1.write(firstPlayerResponse.toString() + '\n');
+        toPlayer1.flush();
+
+        secondPlayerResponse.put("result", result);
+        secondPlayerResponse.put("secondPlayerScore", secondPlayerScore);
+        secondPlayerResponse.put("firstPlayerScore", firstPlayerScore);
+        toPlayer2.write(secondPlayerResponse.toString() + '\n');
+        toPlayer2.flush();
+    }
+
+    public void firstPlayerContinue() throws IOException {
+        firstPlayerResponse.put("result", Command.CONTINUE);
+        firstPlayerResponse.put("firstPlayerScore", firstPlayerScore);
+        firstPlayerResponse.put("secondPlayerScore", secondPlayerScore);
+        toPlayer1.write(firstPlayerResponse.toString() + '\n');
+        toPlayer1.flush();
+    }
+
+    public void secondPlayerContinue() throws IOException {
+        secondPlayerResponse.put("result", Command.CONTINUE);
+        secondPlayerResponse.put("firstPlayerScore", firstPlayerScore);
+        secondPlayerResponse.put("secondPlayerScore", secondPlayerScore);
+        toPlayer2.write(secondPlayerResponse.toString() + '\n');
+        toPlayer2.flush();
+    }
+
+    public void sendCard(Command player) throws IOException {
+        JSONObject response = firstPlayerResponse;
+        OutputStreamWriter toPlayer = toPlayer1;
+
+        if (player == Command.PLAYER2){
+            response = secondPlayerResponse;
+            toPlayer = toPlayer2;
+        }
+
+        Card randomCard = getRandomCard();
+        response.put("card", randomCard.getValue());
+        toPlayer.write(response.toString() + '\n');
+        toPlayer.flush();
+
+        if (player == Command.PLAYER1){firstPlayerScore += randomCard.getValue();}
+        if (player == Command.PLAYER2){secondPlayerScore += randomCard.getValue();}
+
+        System.out.println("CARD: " + randomCard.getCardtype() + ", VALUE: " + randomCard.getValue());
+    }
     @Override
     public void run() {
         try {
-            //notify player1 that player2 has joined
-            toPlayer1.writeInt(1);
+            // powiadomienie, że drugi gracz dołączył
+            JSONObject jsonObject = new JSONObject();
+            jsonObject.put("secondPlayer", true);
+            toPlayer1.write(jsonObject.toString() + '\n');
+            toPlayer1.flush();
 
             while (firstPlayer.isConnected() && secondPlayer.isConnected()) {
                 try {
-                    System.out.println(firstPlayerPassed);
+                    String dataString = fromPlayer1.readLine();
+                    JSONObject data = new JSONObject(dataString);
 
-                    int command = fromPlayer1.readInt();
-                    if (command == TAKE) { // T
+                    Command command = data.getEnum(Command.class, "command");
+                    if (command == Command.TAKE) {
+
                         System.out.println("Sending a new card to player 1 ");
-                        int randomCard = getRandomCard();
-                        toPlayer1.writeInt(randomCard);
-                        firstPlayerScore += randomCard;
-                        System.out.println("CARD: " + randomCard);
-                        toPlayer1.flush();
+                        sendCard(Command.PLAYER1);
+                        checkIfWin(firstPlayerResponse, firstPlayerScore, Command.PLAYER1);
 
-                        //check if first player won by playing his move
-                        if (firstPlayerScore == 21) {
-                            System.out.println("if (firstPlayerScore == 21)");
-                            toPlayer1.writeInt(PLAYER1_WON);
-                            toPlayer2.writeInt(PLAYER1_WON);
-                            sendMove(toPlayer2, command);
-                            break;
-                        }
+                    } else if (command == Command.PLAYER1_PASS) {
 
-                        //check if first player lose by playing his move
-                        else if (firstPlayerScore > 21) {
-                            System.out.println("else if (firstPlayerScore > 21)");
-                            toPlayer1.writeInt(PLAYER2_WON);
-                            toPlayer2.writeInt(PLAYER2_WON);
-                            sendMove(toPlayer2, command);
-                            break;
-                        } else {
-                            System.out.println("first else");
-                            toPlayer2.writeInt(CONTINUE);
-                            sendMove(toPlayer2, command);
-                            // send opponents score
-                        }
-
-                    } else if (command == PLAYER1_PASS) {
-                        System.out.println("Sending score to player 1");
-                        toPlayer1.writeInt(PLAYER1_PASS);
-                        toPlayer2.writeInt(PLAYER1_PASS);
-                        toPlayer1.writeInt(firstPlayerScore);
-                        toPlayer1.flush();
-                        sendMove(toPlayer2, command);
+                        System.out.println("Player 1 passed");
+                        sendResponse(Command.PLAYER1_PASS);
                         firstPlayerPassed = true;
-                    } else if (command == WAIT) {
-                        System.out.println("Player 1 waiting");
-                        toPlayer2.writeInt(CONTINUE);
-                        sendMove(toPlayer2, command);
+
+                    } else if (command == Command.WAIT) {
+                        secondPlayerContinue();
                     }
 
-                    System.out.println("W przedprogu");
+                    dataString = fromPlayer2.readLine();
+                    data = new JSONObject(dataString);
+                    firstPlayerResponse = new JSONObject();
+                    secondPlayerResponse = new JSONObject();
 
-                    command = fromPlayer2.readInt();
-                    System.out.println("Int read");
-                    if (command == TAKE) { // T
+                    command = data.getEnum(Command.class, "command");
+                    if (command == Command.TAKE) {
+
                         System.out.println("Sending a new card to player 2");
-                        int randomCard = getRandomCard();
-                        toPlayer2.writeInt(randomCard);
-                        secondPlayerScore += randomCard;
-                        System.out.println("CARD: " + randomCard);
-                        toPlayer2.flush();
+                        sendCard(Command.PLAYER2);
+                        checkIfWin(secondPlayerResponse, secondPlayerScore, Command.PLAYER2);
 
-                        checkIfWin(PLAYER2, secondPlayerScore);
-                        sendMove(toPlayer1, command);
+                    } else if (command == Command.PLAYER2_PASS) {
 
-                    } else if (command == PLAYER2_PASS) {
-                        System.out.println("Sending score to player 2");
-                        toPlayer1.writeInt(PLAYER2_PASS);
-                        toPlayer2.writeInt(PLAYER2_PASS);
-                        toPlayer2.writeInt(secondPlayerScore);
-                        toPlayer2.flush();
-                        sendMove(toPlayer1, command);
+                        System.out.println("Player 2 passed");
+                        sendResponse(Command.PLAYER2_PASS);
                         secondPlayerPassed = true;
-                    }
 
-                    else if (command == WAIT) {
-                        System.out.println("Player 2 waiting");
-                        toPlayer1.writeInt(CONTINUE);
-                        sendMove(toPlayer1, command);
+                    } else if (command == Command.WAIT) {
+                        firstPlayerContinue();
                     }
 
                     if (firstPlayerPassed && secondPlayerPassed && (firstPlayerScore < 21) && (secondPlayerScore < 21)) {
 
                         if (firstPlayerScore < secondPlayerScore) {
-                            toPlayer1.writeInt(PLAYER2_WON);
-                            toPlayer2.writeInt(PLAYER2_WON);
+                            sendResponse(Command.PLAYER2_WON);
                         } else if (firstPlayerScore > secondPlayerScore) {
-                            toPlayer1.writeInt(PLAYER1_WON);
-                            toPlayer2.writeInt(PLAYER1_WON);
+                            sendResponse(Command.PLAYER1_WON);
                         } else {
-                            toPlayer1.writeInt(DRAW);
-                            toPlayer2.writeInt(DRAW);
+                            sendResponse(Command.DRAW);
                         }
                     }
-                    System.out.println("--------------------");
 
                 } catch (IOException e) {
 
@@ -201,7 +201,7 @@ public class ClientHandler implements Runnable {
         }
     }
 
-    public void closeEverything(Socket socket, InputStream in, OutputStream out) {
+    public void closeEverything(Socket socket, BufferedReader in, OutputStreamWriter out) {
         try {
             if (in != null) {
                 in.close();
